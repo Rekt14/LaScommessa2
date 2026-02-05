@@ -1,13 +1,14 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const mongoose = require('mongoose');
 const cors = require('cors');
 
 const app = express();
 app.use(cors());
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
+const io = new Server(server, { 
+    cors: { origin: "*", methods: ["GET", "POST"] } 
+});
 
 // --- CONFIGURAZIONE GIOCO ---
 const suits = ["Denari", "Spade", "Bastoni", "Coppe"];
@@ -26,8 +27,11 @@ function createDeck() {
     return deck.sort(() => Math.random() - 0.5);
 }
 
-// --- SOCKET LOGIC ---
+// --- LOGICA SERVER ---
 io.on('connection', (socket) => {
+    console.log('Connesso:', socket.id);
+
+    // Creazione Stanza
     socket.on('createRoom', (data) => {
         const roomId = Math.random().toString(36).substring(2, 7);
         rooms[roomId] = {
@@ -42,25 +46,29 @@ io.on('connection', (socket) => {
         };
         socket.join(roomId);
         socket.emit('roomCreated', rooms[roomId]);
-        io.emit('updateRoomList', getWaitingRooms());
+        io.emit('updateRoomList', Object.values(rooms).filter(r => r.status === 'waiting'));
     });
 
+    // Unione Stanza
     socket.on('joinRoom', (data) => {
         const room = rooms[data.roomId];
         if (room && room.players.length < room.maxPlayers) {
             room.players.push({ id: socket.id, name: data.playerName, points: 0, tricksWon: 0, bet: null });
             socket.join(data.roomId);
+            
             if (room.players.length == room.maxPlayers) {
                 room.status = 'playing';
                 io.to(room.id).emit('startGame', room);
                 startNewRound(room);
             }
-            io.emit('updateRoomList', getWaitingRooms());
+            io.emit('updateRoomList', Object.values(rooms).filter(r => r.status === 'waiting'));
         }
     });
 
+    // Gestione Scommesse
     socket.on('placeBet', ({ roomId, bet }) => {
         const room = rooms[roomId];
+        if (!room) return;
         const player = room.players.find(p => p.id === socket.id);
         player.bet = bet;
 
@@ -70,8 +78,11 @@ io.on('connection', (socket) => {
         }
     });
 
+    // Gestione Giocata Carta
     socket.on('playCard', ({ roomId, card }) => {
         const room = rooms[roomId];
+        if (!room) return;
+
         room.currentTrick.push({ owner: socket.id, card });
         io.to(roomId).emit('cardPlayed', { owner: socket.id, card });
 
@@ -84,10 +95,12 @@ io.on('connection', (socket) => {
     });
 
     socket.on('disconnect', () => {
-        // Pulizia stanze vuote se necessario
+        // Opzionale: gestire la chiusura stanza se il creatore esce
+        console.log('Disconnesso:', socket.id);
     });
 });
 
+// --- FUNZIONI DI GIOCO ---
 function startNewRound(room) {
     const deck = createDeck();
     room.currentTrick = [];
@@ -112,17 +125,20 @@ function resolveTrick(room) {
     const winningPlayer = room.players.find(p => p.id === winner.owner);
     winningPlayer.tricksWon++;
     
+    // Chi vince la mano inizia la prossima
     room.turnIndex = room.players.findIndex(p => p.id === winner.owner);
     
     setTimeout(() => {
-        io.to(room.id).emit('trickResolved', { winnerId: winner.owner, players: room.players });
+        io.to(room.id).emit('trickResolved', { 
+            winnerId: winner.owner, 
+            players: room.players,
+            lastTrick: room.currentTrick 
+        });
         room.currentTrick = [];
-        // Logica fine round o prossimo turno...
+
+        // Qui potremmo aggiungere il controllo fine round
     }, 2000);
 }
 
-function getWaitingRooms() {
-    return Object.values(rooms).filter(r => r.status === 'waiting');
-}
-
-server.listen(process.env.PORT || 3000, () => console.log('Server pronto'));
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log(`Server pronto sulla porta ${PORT}`));
