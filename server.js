@@ -95,15 +95,23 @@ io.on('connection', (socket) => {
     });
 
     socket.on('disconnect', () => {
-        for (const id in rooms) {
-            const index = rooms[id].players.findIndex(p => p.id === socket.id);
-            if (index !== -1) {
-                rooms[id].players.splice(index, 1);
-                if (rooms[id].players.length === 0) delete rooms[id];
-                io.emit('updateRoomList', Object.values(rooms).filter(r => r.status === 'waiting'));
-            }
+    for (const roomId in rooms) {
+        const room = rooms[roomId];
+        const playerIndex = room.players.findIndex(p => p.id === socket.id);
+
+        if (playerIndex !== -1) {
+            const disconnectedPlayer = room.players[playerIndex];
+            // Avvisa gli altri nella stanza
+            io.to(roomId).emit('playerDisconnected', { name: disconnectedPlayer.name });
+            
+            // Elimina la stanza per liberare memoria
+            delete rooms[roomId];
+            
+            // Aggiorna la lista stanze globale per chi è ancora in lobby
+            io.emit('updateRoomList', Object.values(rooms).filter(r => r.status === 'waiting'));
+            break; 
         }
-    });
+    }
 });
 
 function startNewRound(room) {
