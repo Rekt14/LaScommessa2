@@ -10,7 +10,6 @@ const io = new Server(server, {
     cors: { origin: "*", methods: ["GET", "POST"] } 
 });
 
-// --- CONFIGURAZIONE GIOCO ---
 const suits = ["Denari", "Spade", "Bastoni", "Coppe"];
 const values = [
     { n: "Asso", p: 11 }, { n: "Re", p: 10 }, { n: "Cavallo", p: 9 }, { n: "Fante", p: 8 },
@@ -20,42 +19,36 @@ const suitOrder = { Denari: 4, Spade: 3, Bastoni: 2, Coppe: 1 };
 
 const rooms = {};
 
-// --- UTILS ---
 function createDeck() {
     let deck = [];
     suits.forEach(s => values.forEach(v => deck.push({ suit: s, name: v.n, power: v.p })));
     return deck.sort(() => Math.random() - 0.5);
 }
 
-// --- LOGICA SERVER ---
 io.on('connection', (socket) => {
-    console.log('Connesso:', socket.id);
-
-    // Creazione Stanza
     socket.on('createRoom', (data) => {
         const roomId = Math.random().toString(36).substring(2, 7);
         rooms[roomId] = {
             id: roomId,
             creator: data.playerName,
             maxPlayers: data.maxPlayers,
-            players: [{ id: socket.id, name: data.playerName, points: 0, tricksWon: 0, bet: null }],
+            players: [{ id: socket.id, name: data.playerName, points: 0, tricksWon: 0, bet: null, ready: false }],
             status: 'waiting',
             currentRound: 1,
             currentTrick: [],
-            turnIndex: 0
+            turnIndex: 0,
+            tricksInRound: 0
         };
         socket.join(roomId);
         socket.emit('roomCreated', rooms[roomId]);
         io.emit('updateRoomList', Object.values(rooms).filter(r => r.status === 'waiting'));
     });
 
-    // Unione Stanza
     socket.on('joinRoom', (data) => {
         const room = rooms[data.roomId];
         if (room && room.players.length < room.maxPlayers) {
-            room.players.push({ id: socket.id, name: data.playerName, points: 0, tricksWon: 0, bet: null });
+            room.players.push({ id: socket.id, name: data.playerName, points: 0, tricksWon: 0, bet: null, ready: false });
             socket.join(data.roomId);
-            
             if (room.players.length == room.maxPlayers) {
                 room.status = 'playing';
                 io.to(room.id).emit('startGame', room);
@@ -65,27 +58,22 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Gestione Scommesse
     socket.on('placeBet', ({ roomId, bet }) => {
         const room = rooms[roomId];
         if (!room) return;
         const player = room.players.find(p => p.id === socket.id);
         player.bet = bet;
-
         if (room.players.every(p => p.bet !== null)) {
             io.to(roomId).emit('betsConfirmed', room.players);
             io.to(room.players[room.turnIndex].id).emit('yourTurn');
         }
     });
 
-    // Gestione Giocata Carta
     socket.on('playCard', ({ roomId, card }) => {
         const room = rooms[roomId];
         if (!room) return;
-
         room.currentTrick.push({ owner: socket.id, card });
         io.to(roomId).emit('cardPlayed', { owner: socket.id, card });
-
         if (room.currentTrick.length === room.players.length) {
             resolveTrick(room);
         } else {
@@ -94,18 +82,35 @@ io.on('connection', (socket) => {
         }
     });
 
+    socket.on('readyForNextRound', ({ roomId }) => {
+        const room = rooms[roomId];
+        if (!room) return;
+        const player = room.players.find(p => p.id === socket.id);
+        player.ready = true;
+        if (room.players.every(p => p.ready)) {
+            room.currentRound++;
+            room.players.forEach(p => p.ready = false);
+            startNewRound(room);
+        }
+    });
+
     socket.on('disconnect', () => {
-        // Opzionale: gestire la chiusura stanza se il creatore esce
-        console.log('Disconnesso:', socket.id);
+        for (const id in rooms) {
+            const index = rooms[id].players.findIndex(p => p.id === socket.id);
+            if (index !== -1) {
+                rooms[id].players.splice(index, 1);
+                if (rooms[id].players.length === 0) delete rooms[id];
+                io.emit('updateRoomList', Object.values(rooms).filter(r => r.status === 'waiting'));
+            }
+        }
     });
 });
 
-// --- FUNZIONI DI GIOCO ---
 function startNewRound(room) {
     const deck = createDeck();
     room.currentTrick = [];
+    room.tricksInRound = 0;
     room.players.forEach(p => { p.bet = null; p.tricksWon = 0; });
-    
     room.players.forEach(p => {
         const hand = deck.splice(0, room.currentRound);
         io.to(p.id).emit('yourHand', { hand, round: room.currentRound });
@@ -115,29 +120,33 @@ function startNewRound(room) {
 function resolveTrick(room) {
     let winner = room.currentTrick[0];
     for (let i = 1; i < room.currentTrick.length; i++) {
-        const current = room.currentTrick[i];
-        if (current.card.power > winner.card.power || 
-           (current.card.power === winner.card.power && suitOrder[current.card.suit] > suitOrder[winner.card.suit])) {
-            winner = current;
+        const cur = room.currentTrick[i];
+        if (cur.card.power > winner.card.power || (cur.card.power === winner.card.power && suitOrder[cur.card.suit] > suitOrder[winner.card.suit])) {
+            winner = cur;
         }
     }
-
     const winningPlayer = room.players.find(p => p.id === winner.owner);
     winningPlayer.tricksWon++;
-    
-    // Chi vince la mano inizia la prossima
     room.turnIndex = room.players.findIndex(p => p.id === winner.owner);
-    
-    setTimeout(() => {
-        io.to(room.id).emit('trickResolved', { 
-            winnerId: winner.owner, 
-            players: room.players,
-            lastTrick: room.currentTrick 
-        });
-        room.currentTrick = [];
+    room.tricksInRound++;
 
-        // Qui potremmo aggiungere il controllo fine round
+    setTimeout(() => {
+        io.to(room.id).emit('trickResolved', { winnerId: winner.owner, players: room.players });
+        room.currentTrick = [];
+        if (room.tricksInRound === room.currentRound) {
+            endRound(room);
+        } else {
+            io.to(room.players[room.turnIndex].id).emit('yourTurn');
+        }
     }, 2000);
+}
+
+function endRound(room) {
+    room.players.forEach(p => {
+        const gained = (p.tricksWon === p.bet) ? (10 + p.bet) : -Math.abs(p.bet - p.tricksWon);
+        p.points += gained;
+    });
+    io.to(room.id).emit('roundEnded', { players: room.players, nextRound: room.currentRound + 1 });
 }
 
 const PORT = process.env.PORT || 3000;
