@@ -26,6 +26,7 @@ function createDeck() {
 }
 
 io.on('connection', (socket) => {
+    // CREAZIONE STANZA
     socket.on('createRoom', (data) => {
         const roomId = Math.random().toString(36).substring(2, 7);
         rooms[roomId] = {
@@ -44,6 +45,7 @@ io.on('connection', (socket) => {
         io.emit('updateRoomList', Object.values(rooms).filter(r => r.status === 'waiting'));
     });
 
+    // ACCESSO STANZA
     socket.on('joinRoom', (data) => {
         const room = rooms[data.roomId];
         if (room && room.players.length < room.maxPlayers) {
@@ -58,22 +60,27 @@ io.on('connection', (socket) => {
         }
     });
 
+    // SCOMMESSA
     socket.on('placeBet', ({ roomId, bet }) => {
         const room = rooms[roomId];
         if (!room) return;
         const player = room.players.find(p => p.id === socket.id);
-        player.bet = bet;
+        if (player) player.bet = bet;
+
         if (room.players.every(p => p.bet !== null)) {
             io.to(roomId).emit('betsConfirmed', room.players);
             io.to(room.players[room.turnIndex].id).emit('yourTurn');
         }
     });
 
+    // GIOCATA CARTA
     socket.on('playCard', ({ roomId, card }) => {
         const room = rooms[roomId];
-        if (!room) return;
+        if (!room || room.players[room.turnIndex].id !== socket.id) return;
+
         room.currentTrick.push({ owner: socket.id, card });
         io.to(roomId).emit('cardPlayed', { owner: socket.id, card });
+
         if (room.currentTrick.length === room.players.length) {
             resolveTrick(room);
         } else {
@@ -82,62 +89,60 @@ io.on('connection', (socket) => {
         }
     });
 
+    // PRONTO PER PROSSIMO ROUND
     socket.on('readyForNextRound', ({ roomId }) => {
         const room = rooms[roomId];
         if (!room) return;
         const player = room.players.find(p => p.id === socket.id);
-        player.ready = true;
+        if (player) player.ready = true;
+
         if (room.players.every(p => p.ready)) {
             room.currentRound++;
-            room.players.forEach(p => p.ready = false);
+            room.players.forEach(p => { p.ready = false; p.bet = null; p.tricksWon = 0; });
             startNewRound(room);
         }
     });
 
+    // DISCONNESSIONE
     socket.on('disconnect', () => {
-    for (const roomId in rooms) {
-        const room = rooms[roomId];
-        const playerIndex = room.players.findIndex(p => p.id === socket.id);
-
-        if (playerIndex !== -1) {
-            const disconnectedPlayer = room.players[playerIndex];
-            // Avvisa gli altri nella stanza
-            io.to(roomId).emit('playerDisconnected', { name: disconnectedPlayer.name });
-            
-            // Elimina la stanza per liberare memoria
-            delete rooms[roomId];
-            
-            // Aggiorna la lista stanze globale per chi è ancora in lobby
-            io.emit('updateRoomList', Object.values(rooms).filter(r => r.status === 'waiting'));
-            break; 
+        for (const roomId in rooms) {
+            const room = rooms[roomId];
+            const playerIndex = room.players.findIndex(p => p.id === socket.id);
+            if (playerIndex !== -1) {
+                io.to(roomId).emit('playerDisconnected', { name: room.players[playerIndex].name });
+                delete rooms[roomId];
+                io.emit('updateRoomList', Object.values(rooms).filter(r => r.status === 'waiting'));
+                break;
+            }
         }
-    }
+    });
 });
 
 function startNewRound(room) {
     const deck = createDeck();
     room.currentTrick = [];
     room.tricksInRound = 0;
+    
+    // Distribuzione carte
     room.players.forEach(p => { 
-        p.bet = null; 
-        p.tricksWon = 0; 
-        // Assegniamo la mano all'oggetto player nel server
         p.hand = deck.splice(0, room.currentRound); 
     });
 
+    // Invio dati personalizzati (Spia Round 1)
     room.players.forEach(p => {
-        // Prepariamo i dati degli avversari da inviare
         const opponentsData = room.players.map(opp => ({
             id: opp.id,
             name: opp.name,
-            // Al Round 1 inviamo la carta in chiaro, altrimenti la nascondiamo
+            points: opp.points,
+            tricksWon: opp.tricksWon,
+            bet: opp.bet,
             hand: (room.currentRound === 1) ? opp.hand : null 
         }));
 
         io.to(p.id).emit('yourHand', { 
             hand: p.hand, 
             round: room.currentRound,
-            opponents: opponentsData // Nuova proprietà
+            opponents: opponentsData 
         });
     });
 }
@@ -150,6 +155,7 @@ function resolveTrick(room) {
             winner = cur;
         }
     }
+    
     const winningPlayer = room.players.find(p => p.id === winner.owner);
     winningPlayer.tricksWon++;
     room.turnIndex = room.players.findIndex(p => p.id === winner.owner);
