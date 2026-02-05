@@ -118,10 +118,27 @@ function startNewRound(room) {
     const deck = createDeck();
     room.currentTrick = [];
     room.tricksInRound = 0;
-    room.players.forEach(p => { p.bet = null; p.tricksWon = 0; });
+    room.players.forEach(p => { 
+        p.bet = null; 
+        p.tricksWon = 0; 
+        // Assegniamo la mano all'oggetto player nel server
+        p.hand = deck.splice(0, room.currentRound); 
+    });
+
     room.players.forEach(p => {
-        const hand = deck.splice(0, room.currentRound);
-        io.to(p.id).emit('yourHand', { hand, round: room.currentRound });
+        // Prepariamo i dati degli avversari da inviare
+        const opponentsData = room.players.map(opp => ({
+            id: opp.id,
+            name: opp.name,
+            // Al Round 1 inviamo la carta in chiaro, altrimenti la nascondiamo
+            hand: (room.currentRound === 1) ? opp.hand : null 
+        }));
+
+        io.to(p.id).emit('yourHand', { 
+            hand: p.hand, 
+            round: room.currentRound,
+            opponents: opponentsData // Nuova proprietà
+        });
     });
 }
 
