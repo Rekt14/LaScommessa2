@@ -29,7 +29,7 @@ io.on('connection', (socket) => {
     // CREAZIONE STANZA
     socket.on('createRoom', (data) => {
         const roomId = Math.random().toString(36).substring(2, 7);
-        rooms[roomId] = {
+       rooms[roomId] = {
             id: roomId,
             creator: data.playerName,
             maxPlayers: data.maxPlayers,
@@ -38,7 +38,8 @@ io.on('connection', (socket) => {
             currentRound: 1,
             currentTrick: [],
             turnIndex: 0,
-            tricksInRound: 0
+            tricksInRound: 0,
+            roundStarterIndex: 0 // Tiene traccia di chi ha iniziato il round corrente
         };
         socket.join(roomId);
         socket.emit('roomCreated', rooms[roomId]);
@@ -61,15 +62,46 @@ io.on('connection', (socket) => {
     });
 
     // SCOMMESSA
+// SCOMMESSA SEQUENZIALE
     socket.on('placeBet', ({ roomId, bet }) => {
         const room = rooms[roomId];
         if (!room) return;
+
+        // Verifica che sia effettivamente il turno di questo giocatore per scommettere
+        if (room.players[room.turnIndex].id !== socket.id) {
+            return; // Ignora se prova a scommettere fuori turno
+        }
+
         const player = room.players.find(p => p.id === socket.id);
         if (player) player.bet = bet;
 
-        if (room.players.every(p => p.bet !== null)) {
+        // 1. Notifica a TUTTI che questo giocatore ha scommesso (così vedono il numero)
+        io.to(roomId).emit('playerBetPlaced', { 
+            playerId: socket.id, 
+            bet: bet 
+        });
+
+        // 2. Controlliamo se tutti hanno scommesso
+        const allHaveBet = room.players.every(p => p.bet !== null && p.bet !== undefined);
+
+        if (allHaveBet) {
+            // A. TUTTI HANNO SCOMMESSO -> INIZIA LA PARTITA
+            
+            // IMPORTANTE: Resettiamo il turnIndex a chi ha iniziato il round (roundStarterIndex)
+            // Perché chi inizia a scommettere deve anche giocare la prima carta.
+            room.turnIndex = room.roundStarterIndex;
+
             io.to(roomId).emit('betsConfirmed', room.players);
+            
+            // Diamo il turno di gioco al primo giocatore
             io.to(room.players[room.turnIndex].id).emit('yourTurn');
+
+        } else {
+            // B. MANCA QUALCUNO -> PASSA AL PROSSIMO PER SCOMMETTERE
+            room.turnIndex = (room.turnIndex + 1) % room.players.length;
+            
+            // Notifica al prossimo che tocca a lui scommettere
+            io.to(room.players[room.turnIndex].id).emit('betTurn', { message: "Tocca a te scommettere!" });
         }
     });
 
@@ -119,16 +151,41 @@ io.on('connection', (socket) => {
 });
 
 function startNewRound(room) {
+    // 1. Gestione Mazzo
     const deck = createDeck();
+    
+    // 2. Reset Variabili di gioco
     room.currentTrick = [];
     room.tricksInRound = 0;
     
-    // Distribuzione carte
-    room.players.forEach(p => { 
+    // 3. Gestione chi inizia (Rotazione o Random)
+    if (room.currentRound === 1) {
+        // Round 1: Scegliamo un giocatore a caso che inizierà a scommettere e giocare
+        room.roundStarterIndex = Math.floor(Math.random() * room.players.length);
+    } else {
+        // Round > 1: Il turno passa al giocatore successivo rispetto a chi ha iniziato il round precedente
+        room.roundStarterIndex = (room.roundStarterIndex + 1) % room.players.length;
+    }
+
+    // Impostiamo il turno attuale a chi deve iniziare (per la fase scommesse)
+    room.turnIndex = room.roundStarterIndex;
+
+    // 4. Distribuzione carte (Logica esistente)
+    // Distribuisce un numero di carte pari al round corrente
+    const cardsNeeded = room.players.length * room.currentRound;
+    
+    // Controllo sicurezza mazzo (opzionale ma consigliato)
+    if (deck.length < cardsNeeded) {
+        console.error("ERRORE: Non ci sono abbastanza carte nel mazzo!");
+        return; 
+    }
+
+    room.players.forEach((p, index) => { 
+        // Nota: Assicurati che deck.splice funzioni correttamente (l'hai definita fuori)
         p.hand = deck.splice(0, room.currentRound); 
     });
 
-    // Invio dati personalizzati (Spia Round 1)
+    // 5. Invio dati ai client
     room.players.forEach(p => {
         const opponentsData = room.players.map(opp => ({
             id: opp.id,
@@ -136,6 +193,7 @@ function startNewRound(room) {
             points: opp.points,
             tricksWon: opp.tricksWon,
             bet: opp.bet,
+            // Al round 1 mostriamo le carte di tutti (se vuoi mantenere questa regola), altrimenti nascondi
             hand: (room.currentRound === 1) ? opp.hand : null 
         }));
 
@@ -145,6 +203,16 @@ function startNewRound(room) {
             opponents: opponentsData 
         });
     });
+
+    // 6. AVVIO FASE SCOMMESSE
+    // Diciamo a tutti di aggiornare l'HUD (per pulire vecchie scommesse)
+    io.to(room.id).emit('newRoundStarted', { 
+        round: room.currentRound, 
+        starterId: room.players[room.turnIndex].id 
+    });
+
+    // Diciamo SOLO al giocatore di turno che tocca a lui scommettere
+    io.to(room.players[room.turnIndex].id).emit('betTurn', { message: "Tocca a te scommettere!" });
 }
 
 function resolveTrick(room) {
