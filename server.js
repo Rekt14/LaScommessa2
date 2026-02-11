@@ -46,6 +46,11 @@ io.on('connection', (socket) => {
         io.emit('updateRoomList', Object.values(rooms).filter(r => r.status === 'waiting'));
     });
 
+    // Aggiorna lista stanze
+socket.on('requestUpdateRooms', () => {
+    socket.emit('updateRoomList', Object.values(rooms).filter(r => r.status === 'waiting'));
+});
+
     // ACCESSO STANZA
     socket.on('joinRoom', (data) => {
         const room = rooms[data.roomId];
