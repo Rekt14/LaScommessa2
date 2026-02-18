@@ -58,6 +58,7 @@ io.on('connection', (socket) => {
         const roomId = Math.random().toString(36).substring(2, 7);
         rooms[roomId] = {
             id: roomId,
+            creator: data.playerName,
             creatorUserId: socket.userId,
             maxPlayers: data.maxPlayers,
             players: [{ 
