@@ -124,35 +124,47 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on('playCard', ({ roomId, card }) => {
-        const room = rooms[roomId];
-        // ✅ Controllo su userId
-        if (!room || room.players[room.turnIndex].userId !== socket.userId) return;
+   socket.on('playCard', ({ roomId, card }) => {
+    const room = rooms[roomId];
+    if (!room) return;
+    
+    const currentPlayer = room.players[room.turnIndex];
+    if (currentPlayer.userId !== socket.userId) return;
 
-        // Salviamo userId nel trick per sicurezza nel resolve
-        room.currentTrick.push({ owner: socket.id, userId: socket.userId, card });
-        io.to(roomId).emit('cardPlayed', { owner: socket.id, card });
+    // ✅ TROVA E SEGNA LA CARTA COME GIOCATA SUL SERVER
+    const cardInServerHand = currentPlayer.hand.find(c => 
+        c.suit === card.suit && c.name === card.name && !c.played
+    );
 
-        if (room.currentTrick.length === room.players.length) {
-            resolveTrick(room);
-        } else {
-            room.turnIndex = (room.turnIndex + 1) % room.players.length;
-            io.to(room.players[room.turnIndex].id).emit('yourTurn');
-        }
-    });
+    if (cardInServerHand) {
+        cardInServerHand.played = true; // La carta è ora "consumata" sul server
+    }
+
+    room.currentTrick.push({ owner: socket.id, userId: socket.userId, card });
+    io.to(roomId).emit('cardPlayed', { owner: socket.id, card });
+
+    if (room.currentTrick.length === room.players.length) {
+        resolveTrick(room);
+    } else {
+        room.turnIndex = (room.turnIndex + 1) % room.players.length;
+        io.to(room.players[room.turnIndex].id).emit('yourTurn');
+    }
+});
 
     socket.on('readyForNextRound', ({ roomId }) => {
-        const room = rooms[roomId];
-        if (!room) return;
-        const player = room.players.find(p => p.userId === socket.userId);
-        if (player) player.ready = true;
+    const room = rooms[roomId];
+    if (!room) return;
 
-        if (room.players.every(p => p.ready)) {
-            room.currentRound++;
-            room.players.forEach(p => { p.ready = false; p.bet = null; p.tricksWon = 0; });
-            startNewRound(room);
-        }
-    });
+    const player = room.players.find(p => p.userId === socket.userId);
+    if (player) player.ready = true; // Segna come pronto
+
+    // Se tutti sono pronti, startNewRound
+    if (room.players.every(p => p.ready)) {
+        room.currentRound++;
+        room.players.forEach(p => p.ready = false); // Reset per prossimo round
+        startNewRound(room);
+    }
+});
 
     socket.on('disconnect', () => {
         for (const roomId in rooms) {
@@ -194,49 +206,34 @@ function leaveOldRooms(userId, socket) {
 }
 
 function startNewRound(room) {
-    // 1. Gestione Mazzo
     const deck = createDeck();
-    
-    // 2. Reset Variabili di gioco
     room.currentTrick = [];
     room.tricksInRound = 0;
     
-    // 3. Gestione chi inizia (Rotazione o Random)
+    // Gestione Turni
     if (room.currentRound === 1) {
-        // Round 1: Scegliamo un giocatore a caso che inizierà a scommettere e giocare
         room.roundStarterIndex = Math.floor(Math.random() * room.players.length);
     } else {
-        // Round > 1: Il turno passa al giocatore successivo rispetto a chi ha iniziato il round precedente
         room.roundStarterIndex = (room.roundStarterIndex + 1) % room.players.length;
     }
-
-    // Impostiamo il turno attuale a chi deve iniziare (per la fase scommesse)
     room.turnIndex = room.roundStarterIndex;
 
-    // 4. Distribuzione carte (Logica esistente)
-    // Distribuisce un numero di carte pari al round corrente
-    const cardsNeeded = room.players.length * room.currentRound;
-    
-    // Controllo sicurezza mazzo (opzionale ma consigliato)
-    if (deck.length < cardsNeeded) {
-        console.error("ERRORE: Non ci sono abbastanza carte nel mazzo!");
-        return; 
-    }
-
-    room.players.forEach((p, index) => { 
-        // Nota: Assicurati che deck.splice funzioni correttamente (l'hai definita fuori)
-        p.hand = deck.splice(0, room.currentRound); 
+    // Distribuzione con inizializzazione stato
+    room.players.forEach((p) => { 
+        const rawHand = deck.splice(0, room.currentRound);
+        // ✅ Forziamo lo stato 'played' a false per ogni carta sul server
+        p.hand = rawHand.map(card => ({ ...card, played: false })); 
     });
 
-    // 5. Invio dati ai client
     room.players.forEach(p => {
         const opponentsData = room.players.map(opp => ({
             id: opp.id,
+            userId: opp.userId, // Importante per il frontend
             name: opp.name,
             points: opp.points,
             tricksWon: opp.tricksWon,
             bet: opp.bet,
-            // Al round 1 mostriamo le carte di tutti (se vuoi mantenere questa regola), altrimenti nascondi
+            // Al round 1 le carte sono visibili, altrimenti nulle
             hand: (room.currentRound === 1) ? opp.hand : null 
         }));
 
@@ -247,15 +244,12 @@ function startNewRound(room) {
         });
     });
 
-    // 6. AVVIO FASE SCOMMESSE
-    // Diciamo a tutti di aggiornare l'HUD (per pulire vecchie scommesse)
     io.to(room.id).emit('newRoundStarted', { 
         round: room.currentRound, 
         starterId: room.players[room.turnIndex].id 
     });
 
-    // Diciamo SOLO al giocatore di turno che tocca a lui scommettere
-    io.to(room.players[room.turnIndex].id).emit('betTurn', { message: "Tocca a te scommettere!" });
+    io.to(room.players[room.turnIndex].id).emit('betTurn');
 }
 
 function resolveTrick(room) {
