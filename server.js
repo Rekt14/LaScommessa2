@@ -28,30 +28,23 @@ function createDeck() {
 io.on('connection', (socket) => {
 
     socket.on('handshake', (userId) => {
-        // Salviamo l'ID sul socket immediatamente
         socket.userId = userId;
         
-        // Verifica riconnessione
         for (const roomId in rooms) {
             const room = rooms[roomId];
-            // Ora p.userId esisterà perché lo salviamo in join/create
             const p = room.players.find(p => p.userId === userId);
             
             if (p) {
-                p.id = socket.id; // Aggiorna socket ID
+                p.id = socket.id; // Aggiorna socket ID corrente per le comunicazioni
                 p.online = true;
-                clearTimeout(p.disconnectTimer); // Ferma il countdown
+                clearTimeout(p.disconnectTimer);
                 socket.join(roomId);
                 
-                console.log(`Utente ${p.name} riconnesso con successo.`);
-
                 io.to(roomId).emit('playerBack', { userId: p.userId, newSocketId: socket.id });
 
-                // Invia lo stato attuale
                 socket.emit('reSyncGame', { 
                     room, 
                     hand: p.hand,
-                    // Aggiungiamo info utili per il frontend
                     myId: socket.id 
                 });
                 break;
@@ -59,21 +52,17 @@ io.on('connection', (socket) => {
         }
     });
     
-    // CREAZIONE STANZA
     socket.on('createRoom', (data) => {
-
-        // 1. Esce forzatamente da altre stanze
-    leaveOldRooms(socket.userId, socket);
+        leaveOldRooms(socket.userId, socket);
         
         const roomId = Math.random().toString(36).substring(2, 7);
-       rooms[roomId] = {
+        rooms[roomId] = {
             id: roomId,
-            creator: data.playerName,
-           creatorUserId: socket.userId,
+            creatorUserId: socket.userId,
             maxPlayers: data.maxPlayers,
             players: [{ 
                 id: socket.id, 
-                userId: socket.userId,
+                userId: socket.userId, // ID persistente
                 name: data.playerName, 
                 points: 0, tricksWon: 0, bet: null, ready: false 
             }],
@@ -82,24 +71,15 @@ io.on('connection', (socket) => {
             currentTrick: [],
             turnIndex: 0,
             tricksInRound: 0,
-            roundStarterIndex: 0 // Tiene traccia di chi ha iniziato il round corrente
+            roundStarterIndex: 0 
         };
         socket.join(roomId);
         socket.emit('roomCreated', rooms[roomId]);
         io.emit('updateRoomList', Object.values(rooms).filter(r => r.status === 'waiting'));
     });
 
-    // Aggiorna lista stanze
-socket.on('requestUpdateRooms', () => {
-    socket.emit('updateRoomList', Object.values(rooms).filter(r => r.status === 'waiting'));
-});
-
-    // ACCESSO STANZA
     socket.on('joinRoom', (data) => {
-
-        // 1. Esce forzatamente da altre stanze
-    leaveOldRooms(socket.userId, socket);
-        
+        leaveOldRooms(socket.userId, socket);
         const room = rooms[data.roomId];
         if (room && room.players.length < room.maxPlayers) {
             room.players.push({ 
@@ -118,56 +98,38 @@ socket.on('requestUpdateRooms', () => {
         }
     });
 
-    // SCOMMESSA
-// SCOMMESSA SEQUENZIALE
     socket.on('placeBet', ({ roomId, bet }) => {
         const room = rooms[roomId];
         if (!room) return;
 
-        // Verifica che sia effettivamente il turno di questo giocatore per scommettere
-        if (room.players[room.turnIndex].id !== socket.id) {
-            return; // Ignora se prova a scommettere fuori turno
-        }
+        // ✅ Controllo su userId
+        if (room.players[room.turnIndex].userId !== socket.userId) return;
 
-        const player = room.players.find(p => p.id === socket.id);
+        const player = room.players.find(p => p.userId === socket.userId);
         if (player) player.bet = bet;
 
-        // 1. Notifica a TUTTI che questo giocatore ha scommesso (così vedono il numero)
         io.to(roomId).emit('playerBetPlaced', { 
-            playerId: socket.id, 
+            playerId: socket.id, // ID per animazioni frontend
             bet: bet 
         });
 
-        // 2. Controlliamo se tutti hanno scommesso
-        const allHaveBet = room.players.every(p => p.bet !== null && p.bet !== undefined);
-
-        if (allHaveBet) {
-            // A. TUTTI HANNO SCOMMESSO -> INIZIA LA PARTITA
-            
-            // IMPORTANTE: Resettiamo il turnIndex a chi ha iniziato il round (roundStarterIndex)
-            // Perché chi inizia a scommettere deve anche giocare la prima carta.
+        if (room.players.every(p => p.bet !== null)) {
             room.turnIndex = room.roundStarterIndex;
-
             io.to(roomId).emit('betsConfirmed', room.players);
-            
-            // Diamo il turno di gioco al primo giocatore
             io.to(room.players[room.turnIndex].id).emit('yourTurn');
-
         } else {
-            // B. MANCA QUALCUNO -> PASSA AL PROSSIMO PER SCOMMETTERE
             room.turnIndex = (room.turnIndex + 1) % room.players.length;
-            
-            // Notifica al prossimo che tocca a lui scommettere
             io.to(room.players[room.turnIndex].id).emit('betTurn', { message: "Tocca a te scommettere!" });
         }
     });
 
-    // GIOCATA CARTA
     socket.on('playCard', ({ roomId, card }) => {
         const room = rooms[roomId];
-        if (!room || room.players[room.turnIndex].id !== socket.id) return;
+        // ✅ Controllo su userId
+        if (!room || room.players[room.turnIndex].userId !== socket.userId) return;
 
-        room.currentTrick.push({ owner: socket.id, card });
+        // Salviamo userId nel trick per sicurezza nel resolve
+        room.currentTrick.push({ owner: socket.id, userId: socket.userId, card });
         io.to(roomId).emit('cardPlayed', { owner: socket.id, card });
 
         if (room.currentTrick.length === room.players.length) {
@@ -178,11 +140,10 @@ socket.on('requestUpdateRooms', () => {
         }
     });
 
-    // PRONTO PER PROSSIMO ROUND
     socket.on('readyForNextRound', ({ roomId }) => {
         const room = rooms[roomId];
         if (!room) return;
-        const player = room.players.find(p => p.id === socket.id);
+        const player = room.players.find(p => p.userId === socket.userId);
         if (player) player.ready = true;
 
         if (room.players.every(p => p.ready)) {
@@ -192,24 +153,20 @@ socket.on('requestUpdateRooms', () => {
         }
     });
 
-   // DISCONNESSIONE CON GRACE PERIOD
     socket.on('disconnect', () => {
-    for (const roomId in rooms) {
-        const room = rooms[roomId];
-        const p = room.players.find(p => p.id === socket.id);
-        if (p) {
-            p.online = false;
-            // Avvisa gli altri che parte il countdown di 60s
-            io.to(roomId).emit('playerAway', { userId: p.userId, timeout: 60 });
-
-            p.disconnectTimer = setTimeout(() => {
-                if (!p.online) {
-                    io.to(roomId).emit('playerDisconnected', { name: p.name });
-                    delete rooms[roomId];
-                    io.emit('updateRoomList', Object.values(rooms).filter(r => r.status === 'waiting'));
-                }
-            }, 60000); 
-            break;
+        for (const roomId in rooms) {
+            const room = rooms[roomId];
+            const p = room.players.find(p => p.userId === socket.userId);
+            if (p) {
+                p.online = false;
+                io.to(roomId).emit('playerAway', { userId: p.userId, timeout: 60 });
+                p.disconnectTimer = setTimeout(() => {
+                    if (!p.online) {
+                        io.to(roomId).emit('playerDisconnected', { name: p.name });
+                        delete rooms[roomId];
+                    }
+                }, 60000); 
+                break;
             }
         }
     });
@@ -301,21 +258,22 @@ function startNewRound(room) {
 }
 
 function resolveTrick(room) {
-    let winner = room.currentTrick[0];
+    let winnerObj = room.currentTrick[0];
     for (let i = 1; i < room.currentTrick.length; i++) {
         const cur = room.currentTrick[i];
-        if (cur.card.power > winner.card.power || (cur.card.power === winner.card.power && suitOrder[cur.card.suit] > suitOrder[winner.card.suit])) {
-            winner = cur;
+        if (cur.card.power > winnerObj.card.power || (cur.card.power === winnerObj.card.power && suitOrder[cur.card.suit] > suitOrder[winnerObj.card.suit])) {
+            winnerObj = cur;
         }
     }
     
-    const winningPlayer = room.players.find(p => p.id === winner.owner);
+    // ✅ Cerca per userId (più robusto)
+    const winningPlayer = room.players.find(p => p.userId === winnerObj.userId);
     winningPlayer.tricksWon++;
-    room.turnIndex = room.players.findIndex(p => p.id === winner.owner);
+    room.turnIndex = room.players.findIndex(p => p.userId === winnerObj.userId);
     room.tricksInRound++;
 
     setTimeout(() => {
-        io.to(room.id).emit('trickResolved', { winnerId: winner.owner, players: room.players });
+        io.to(room.id).emit('trickResolved', { winnerId: winnerObj.owner, players: room.players });
         room.currentTrick = [];
         if (room.tricksInRound === room.currentRound) {
             endRound(room);
