@@ -225,10 +225,11 @@ function startNewRound(room) {
     // Distribuzione con inizializzazione stato
     room.players.forEach((p) => { 
         const rawHand = deck.splice(0, room.currentRound);
-        // ✅ Forziamo lo stato 'played' a false per ogni carta sul server
         p.hand = rawHand.map(card => ({ ...card, played: false })); 
+        p.bet = null; // ✅ CRITICO: Resetta la scommessa a null ogni round
+        p.tricksWon = 0; // ✅ CRITICO: Resetta le prese ogni round
     });
-
+    
     room.players.forEach(p => {
         const opponentsData = room.players.map(opp => ({
             id: opp.id,
