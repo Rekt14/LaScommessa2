@@ -45,6 +45,8 @@ io.on('connection', (socket) => {
                 
                 console.log(`Utente ${p.name} riconnesso con successo.`);
 
+                io.to(roomId).emit('playerBack', { userId: p.userId, newSocketId: socket.id });
+
                 // Invia lo stato attuale
                 socket.emit('reSyncGame', { 
                     room, 
@@ -184,21 +186,22 @@ socket.on('requestUpdateRooms', () => {
 
    // DISCONNESSIONE CON GRACE PERIOD
     socket.on('disconnect', () => {
-        for (const roomId in rooms) {
-            const room = rooms[roomId];
-            const p = room.players.find(p => p.id === socket.id);
-            if (p) {
-                p.online = false;
-                // Aspetta 60 secondi
-                p.disconnectTimer = setTimeout(() => {
-                    // Controlla se è ancora offline
-                    if (!p.online) {
-                        io.to(roomId).emit('playerDisconnected', { name: p.name });
-                        delete rooms[roomId];
-                        io.emit('updateRoomList', Object.values(rooms).filter(r => r.status === 'waiting'));
-                    }
-                }, 60000); 
-                break;
+    for (const roomId in rooms) {
+        const room = rooms[roomId];
+        const p = room.players.find(p => p.id === socket.id);
+        if (p) {
+            p.online = false;
+            // Avvisa gli altri che parte il countdown di 60s
+            io.to(roomId).emit('playerAway', { userId: p.userId, timeout: 60 });
+
+            p.disconnectTimer = setTimeout(() => {
+                if (!p.online) {
+                    io.to(roomId).emit('playerDisconnected', { name: p.name });
+                    delete rooms[roomId];
+                    io.emit('updateRoomList', Object.values(rooms).filter(r => r.status === 'waiting'));
+                }
+            }, 60000); 
+            break;
             }
         }
     });
