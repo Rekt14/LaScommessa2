@@ -141,7 +141,11 @@ io.on('connection', (socket) => {
     }
 
     room.currentTrick.push({ owner: socket.id, userId: socket.userId, card });
-    io.to(roomId).emit('cardPlayed', { owner: socket.id, card });
+    io.to(roomId).emit('cardPlayed', { 
+    owner: socket.id, 
+    userId: socket.userId, 
+    card 
+});
 
     if (room.currentTrick.length === room.players.length) {
         resolveTrick(room);
