@@ -26,14 +26,51 @@ function createDeck() {
 }
 
 io.on('connection', (socket) => {
+
+    socket.on('handshake', (userId) => {
+        // Salviamo l'ID sul socket immediatamente
+        socket.userId = userId;
+        
+        // Verifica riconnessione
+        for (const roomId in rooms) {
+            const room = rooms[roomId];
+            // Ora p.userId esisterà perché lo salviamo in join/create
+            const p = room.players.find(p => p.userId === userId);
+            
+            if (p) {
+                p.id = socket.id; // Aggiorna socket ID
+                p.online = true;
+                clearTimeout(p.disconnectTimer); // Ferma il countdown
+                socket.join(roomId);
+                
+                console.log(`Utente ${p.name} riconnesso con successo.`);
+
+                // Invia lo stato attuale
+                socket.emit('reSyncGame', { 
+                    room, 
+                    hand: p.hand,
+                    // Aggiungiamo info utili per il frontend
+                    myId: socket.id 
+                });
+                break;
+            }
+        }
+    });
+    
     // CREAZIONE STANZA
     socket.on('createRoom', (data) => {
         const roomId = Math.random().toString(36).substring(2, 7);
        rooms[roomId] = {
             id: roomId,
             creator: data.playerName,
+           creatorUserId: socket.userId,
             maxPlayers: data.maxPlayers,
-            players: [{ id: socket.id, name: data.playerName, points: 0, tricksWon: 0, bet: null, ready: false }],
+            players: [{ 
+                id: socket.id, 
+                userId: socket.userId,
+                name: data.playerName, 
+                points: 0, tricksWon: 0, bet: null, ready: false 
+            }],
             status: 'waiting',
             currentRound: 1,
             currentTrick: [],
@@ -55,7 +92,12 @@ socket.on('requestUpdateRooms', () => {
     socket.on('joinRoom', (data) => {
         const room = rooms[data.roomId];
         if (room && room.players.length < room.maxPlayers) {
-            room.players.push({ id: socket.id, name: data.playerName, points: 0, tricksWon: 0, bet: null, ready: false });
+            room.players.push({ 
+                id: socket.id, 
+                userId: socket.userId,
+                name: data.playerName, 
+                points: 0, tricksWon: 0, bet: null, ready: false 
+            });
             socket.join(data.roomId);
             if (room.players.length == room.maxPlayers) {
                 room.status = 'playing';
@@ -140,15 +182,22 @@ socket.on('requestUpdateRooms', () => {
         }
     });
 
-    // DISCONNESSIONE
+   // DISCONNESSIONE CON GRACE PERIOD
     socket.on('disconnect', () => {
         for (const roomId in rooms) {
             const room = rooms[roomId];
-            const playerIndex = room.players.findIndex(p => p.id === socket.id);
-            if (playerIndex !== -1) {
-                io.to(roomId).emit('playerDisconnected', { name: room.players[playerIndex].name });
-                delete rooms[roomId];
-                io.emit('updateRoomList', Object.values(rooms).filter(r => r.status === 'waiting'));
+            const p = room.players.find(p => p.id === socket.id);
+            if (p) {
+                p.online = false;
+                // Aspetta 60 secondi
+                p.disconnectTimer = setTimeout(() => {
+                    // Controlla se è ancora offline
+                    if (!p.online) {
+                        io.to(roomId).emit('playerDisconnected', { name: p.name });
+                        delete rooms[roomId];
+                        io.emit('updateRoomList', Object.values(rooms).filter(r => r.status === 'waiting'));
+                    }
+                }, 60000); 
                 break;
             }
         }
