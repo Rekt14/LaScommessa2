@@ -57,6 +57,10 @@ io.on('connection', (socket) => {
     // CREAZIONE STANZA
     // NEL BACKEND
 socket.on('createRoom', (data) => {
+
+        // 1. Esce forzatamente da altre stanze
+    leaveOldRooms(socket.userId, socket);
+        
     // Se l'handshake non è ancora arrivato, usiamo il nome o un fallback
     const userId = socket.userId || `temp_${Math.random()}`; 
     
@@ -91,6 +95,10 @@ socket.on('requestUpdateRooms', () => {
 
     // ACCESSO STANZA
     socket.on('joinRoom', (data) => {
+
+            // 1. Esce forzatamente da altre stanze
+    leaveOldRooms(socket.userId, socket);
+            
         const room = rooms[data.roomId];
         if (room && room.players.length < room.maxPlayers) {
             room.players.push({ 
@@ -204,6 +212,26 @@ socket.on('requestUpdateRooms', () => {
         }
     });
 });
+
+function leaveOldRooms(userId, socket) {
+    for (const roomId in rooms) {
+        const room = rooms[roomId];
+        const playerIndex = room.players.findIndex(p => p.userId === userId);
+
+        if (playerIndex !== -1) {
+            // Se era l'unico o il creatore, distruggiamo la stanza
+            // Altrimenti lo rimuoviamo semplicemente
+            if (room.players.length <= 1 || room.creatorUserId === userId) {
+                io.to(roomId).emit('playerDisconnected', { name: room.players[playerIndex].name });
+                delete rooms[roomId];
+            } else {
+                room.players.splice(playerIndex, 1);
+                io.to(roomId).emit('updateRoomData', room); // Notifica agli altri
+            }
+            socket.leave(roomId); // Esce dal canale Socket.io
+        }
+    }
+}
 
 function startNewRound(room) {
     // 1. Gestione Mazzo
