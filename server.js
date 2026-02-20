@@ -28,65 +28,30 @@ function createDeck() {
 io.on('connection', (socket) => {
 
      socket.on('handshake', (userId) => {
-
         // Salviamo l'ID sul socket immediatamente
-
-        socket.userId = userId;
-
-        
-
+        socket.userId = userId;       
         // Verifica riconnessione
-
         for (const roomId in rooms) {
-
             const room = rooms[roomId];
-
             // Ora p.userId esisterà perché lo salviamo in join/create
-
-            const p = room.players.find(p => p.userId === userId);
-
-            
-
+            const p = room.players.find(p => p.userId === userId);            
             if (p) {
-
                 p.id = socket.id; // Aggiorna socket ID
-
                 p.online = true;
-
                 clearTimeout(p.disconnectTimer); // Ferma il countdown
-
-                socket.join(roomId);
-
-                
-
+                socket.join(roomId);                
                 console.log(`Utente ${p.name} riconnesso con successo.`);
-
-
-
                 io.to(roomId).emit('playerBack', { userId: p.userId, newSocketId: socket.id });
-
-
-
                 // Invia lo stato attuale
-
                 socket.emit('reSyncGame', { 
-
                     room, 
-
                     hand: p.hand,
-
                     // Aggiungiamo info utili per il frontend
-
                     myId: socket.id 
-
                 });
-
                 break;
-
             }
-
         }
-
     });
     
     // CREAZIONE STANZA
@@ -220,45 +185,24 @@ socket.on('requestUpdateRooms', () => {
 
    // DISCONNESSIONE CON GRACE PERIOD
      socket.on('disconnect', () => {
-
     for (const roomId in rooms) {
-
         const room = rooms[roomId];
-
         const p = room.players.find(p => p.id === socket.id);
-
         if (p) {
-
             p.online = false;
-
             // Avvisa gli altri che parte il countdown di 60s
-
             io.to(roomId).emit('playerAway', { userId: p.userId, timeout: 60 });
-
-
-
             p.disconnectTimer = setTimeout(() => {
-
                 if (!p.online) {
-
                     io.to(roomId).emit('playerDisconnected', { name: p.name });
-
                     delete rooms[roomId];
-
                     io.emit('updateRoomList', Object.values(rooms).filter(r => r.status === 'waiting'));
-
                 }
-
             }, 60000); 
-
             break;
-
             }
-
         }
-
     });
-
 });
 
 function startNewRound(room) {
