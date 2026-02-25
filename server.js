@@ -25,6 +25,8 @@ function createDeck() {
     return deck.sort(() => Math.random() - 0.5);
 }
 
+const disconnectTimers = {};
+
 io.on('connection', (socket) => {
 
     socket.on('handshake', (userId) => {
@@ -36,12 +38,14 @@ io.on('connection', (socket) => {
         if (p) {
             p.id = socket.id;
             p.online = true;
-            if (p.disconnectTimer) {
-                clearTimeout(p.disconnectTimer);
-                delete p.disconnectTimer; // <--- Rimuovi l'oggetto circolare
-            }
-            socket.join(roomId);
+
+            // 2. Recupera e cancella il timer dalla mappa esterna
+                if (disconnectTimers[userId]) {
+                    clearTimeout(disconnectTimers[userId]);
+                    delete disconnectTimers[userId];
+                }
             
+            socket.join(roomId);
             io.to(roomId).emit('playerBack', { userId: p.userId, newSocketId: socket.id });
 
             // Crea una copia della stanza senza dati circolari se necessario
@@ -180,10 +184,13 @@ io.on('connection', (socket) => {
             if (p) {
                 p.online = false;
                 io.to(roomId).emit('playerAway', { userId: p.userId, timeout: 60 });
-                p.disconnectTimer = setTimeout(() => {
+
+                // 3. Salva il timer nella mappa esterna usando userId come chiave
+                disconnectTimers[p.userId] = setTimeout(() => {
                     if (!p.online) {
                         io.to(roomId).emit('playerDisconnected', { name: p.name });
                         delete rooms[roomId];
+                        delete disconnectTimers[p.userId]; // Pulizia
                     }
                 }, 60000); 
                 break;
