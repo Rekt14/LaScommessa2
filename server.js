@@ -288,7 +288,17 @@ function endRound(room) {
         const gained = (p.tricksWon === p.bet) ? (10 + p.bet) : -Math.abs(p.bet - p.tricksWon);
         p.points += gained;
     });
-    io.to(room.id).emit('roundEnded', { players: room.players, nextRound: room.currentRound + 1 });
+
+    // Se abbiamo finito il round 10
+    if (room.currentRound === 10) {
+    // eliminiamo la stanza dopo un po' per liberare memoria
+        delete rooms[room.id],
+    } else {
+        io.to(room.id).emit('roundEnded', { 
+            players: room.players, 
+            nextRound: room.currentRound + 1 
+        });
+    }
 }
 
 const PORT = process.env.PORT || 3000;
