@@ -28,29 +28,32 @@ function createDeck() {
 io.on('connection', (socket) => {
 
     socket.on('handshake', (userId) => {
-        socket.userId = userId;
+    socket.userId = userId;
+    for (const roomId in rooms) {
+        const room = rooms[roomId];
+        const p = room.players.find(p => p.userId === userId);
         
-        for (const roomId in rooms) {
-            const room = rooms[roomId];
-            const p = room.players.find(p => p.userId === userId);
-            
-            if (p) {
-                p.id = socket.id; // Aggiorna socket ID corrente per le comunicazioni
-                p.online = true;
+        if (p) {
+            p.id = socket.id;
+            p.online = true;
+            if (p.disconnectTimer) {
                 clearTimeout(p.disconnectTimer);
-                socket.join(roomId);
-                
-                io.to(roomId).emit('playerBack', { userId: p.userId, newSocketId: socket.id });
-
-                socket.emit('reSyncGame', { 
-                    room, 
-                    hand: p.hand,
-                    myId: socket.id 
-                });
-                break;
+                delete p.disconnectTimer; // <--- Rimuovi l'oggetto circolare
             }
+            socket.join(roomId);
+            
+            io.to(roomId).emit('playerBack', { userId: p.userId, newSocketId: socket.id });
+
+            // Crea una copia della stanza senza dati circolari se necessario
+            socket.emit('reSyncGame', { 
+                room, 
+                hand: p.hand,
+                myId: socket.id 
+            });
+            break;
         }
-    });
+    }
+});
     
     socket.on('createRoom', (data) => {
         leaveOldRooms(socket.userId, socket);
@@ -292,7 +295,9 @@ function endRound(room) {
     // Se abbiamo finito il round 10
     if (room.currentRound === 10) {
     // eliminiamo la stanza dopo un po' per liberare memoria
-        delete rooms[room.id],
+        setTimeout(() => {
+            delete rooms[room.id];
+        }, 1000);
     } else {
         io.to(room.id).emit('roundEnded', { 
             players: room.players, 
