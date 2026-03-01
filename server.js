@@ -188,6 +188,7 @@ io.on('connection', (socket) => {
                 // 3. Salva il timer nella mappa esterna usando userId come chiave
                 disconnectTimers[p.userId] = setTimeout(() => {
                     if (!p.online) {
+                        console.log(`[ELIMINAZIONE] Stanza ${roomId} cancellata: Timeout 60s scaduto per utente ${p.userId}`);
                         io.to(roomId).emit('playerDisconnected', { name: p.name });
                         delete rooms[roomId];
                         delete disconnectTimers[p.userId]; // Pulizia
@@ -205,16 +206,21 @@ function leaveOldRooms(userId, socket) {
         const playerIndex = room.players.findIndex(p => p.userId === userId);
 
         if (playerIndex !== -1) {
-            // Se era l'unico o il creatore, distruggiamo la stanza
-            // Altrimenti lo rimuoviamo semplicemente
-            if (room.players.length <= 1 || room.creatorUserId === userId) {
-                io.to(roomId).emit('playerDisconnected', { name: room.players[playerIndex].name });
+            const reason = `${userId} è uscito.`;
+                console.log(`[ELIMINAZIONE] Stanza ${roomId} cancellata: ${reason}`);
+            // Rimuoviamo il giocatore dall'array
+            room.players.splice(playerIndex, 1);
+            socket.leave(roomId);
+
+            // Elimina la stanza SOLO se non c'è più nessuno (nemmeno offline)
+            if (room.players.length === 0) {
+                console.log(`Stanza ${roomId} vuota, eliminata.`);
                 delete rooms[roomId];
             } else {
-                room.players.splice(playerIndex, 1);
-                io.to(roomId).emit('updateRoomData', room); // Notifica agli altri
+                // Notifica chi è rimasto
+                io.to(roomId).emit('updateRoomData', room);
+                io.emit('updateRoomList', Object.values(rooms).filter(r => r.status === 'waiting'));
             }
-            socket.leave(roomId); // Esce dal canale Socket.io
         }
     }
 }
@@ -301,6 +307,7 @@ function endRound(room) {
 
     // Se abbiamo finito il round 10
     if (room.currentRound === 10) {
+        console.log(`[ELIMINAZIONE] Stanza ${room.id} cancellata: Partita terminata (Round 10)`);
     // eliminiamo la stanza dopo un po' per liberare memoria
         setTimeout(() => {
             delete rooms[room.id];
