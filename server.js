@@ -27,13 +27,16 @@ function createDeck() {
 
 io.on('connection', (socket) => {
 
-    socket.on('handshake', (userId) => {
+   socket.on('handshake', (userId) => {
+    console.log("Ricevuto handshake da:", userId); // <-- TEST 1
     socket.userId = userId;
+    
     for (const roomId in rooms) {
         const room = rooms[roomId];
         const p = room.players.find(p => p.userId === userId);
         
         if (p) {
+            console.log("Giocatore trovato! Risincronizzo stanza:", roomId); // <-- TEST 2
             p.id = socket.id;
             p.online = true;
 
@@ -45,9 +48,10 @@ io.on('connection', (socket) => {
                 hand: p.hand,
                 myId: socket.id 
             });
-            break;
+            return;
         }
     }
+    console.log("Nessuna stanza trovata per questo utente."); // <-- TEST 3
 });
     
     socket.on('createRoom', (data) => {
