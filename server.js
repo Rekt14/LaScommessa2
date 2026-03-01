@@ -197,16 +197,19 @@ function leaveOldRooms(userId, socket) {
         const playerIndex = room.players.findIndex(p => p.userId === userId);
 
         if (playerIndex !== -1) {
-            // Se era l'unico o il creatore, distruggiamo la stanza
-            // Altrimenti lo rimuoviamo semplicemente
-            if (room.players.length <= 1 || room.creatorUserId === userId) {
-                io.to(roomId).emit('playerDisconnected', { name: room.players[playerIndex].name });
+            // Rimuoviamo il giocatore dall'array
+            room.players.splice(playerIndex, 1);
+            socket.leave(roomId);
+
+            // Elimina la stanza SOLO se non c'è più nessuno (nemmeno offline)
+            if (room.players.length === 0) {
+                console.log(`Stanza ${roomId} vuota, eliminata.`);
                 delete rooms[roomId];
             } else {
-                room.players.splice(playerIndex, 1);
-                io.to(roomId).emit('updateRoomData', room); // Notifica agli altri
+                // Notifica chi è rimasto
+                io.to(roomId).emit('updateRoomData', room);
+                io.emit('updateRoomList', Object.values(rooms).filter(r => r.status === 'waiting'));
             }
-            socket.leave(roomId); // Esce dal canale Socket.io
         }
     }
 }
