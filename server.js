@@ -25,8 +25,6 @@ function createDeck() {
     return deck.sort(() => Math.random() - 0.5);
 }
 
-const disconnectTimers = {};
-
 io.on('connection', (socket) => {
 
     socket.on('handshake', (userId) => {
@@ -39,16 +37,9 @@ io.on('connection', (socket) => {
             p.id = socket.id;
             p.online = true;
 
-            // 2. Recupera e cancella il timer dalla mappa esterna
-                if (disconnectTimers[userId]) {
-                    clearTimeout(disconnectTimers[userId]);
-                    delete disconnectTimers[userId];
-                }
-            
             socket.join(roomId);
             io.to(roomId).emit('playerBack', { userId: p.userId, newSocketId: socket.id });
 
-            // Crea una copia della stanza senza dati circolari se necessario
             socket.emit('reSyncGame', { 
                 room, 
                 hand: p.hand,
@@ -178,22 +169,19 @@ io.on('connection', (socket) => {
 });
 
     socket.on('disconnect', () => {
-        for (const roomId in rooms) {
-            const room = rooms[roomId];
-            const p = room.players.find(p => p.userId === socket.userId);
-            if (p) {
-                p.online = false;
-                io.to(roomId).emit('playerAway', { userId: p.userId, timeout: 60 });
+    for (const roomId in rooms) {
+        const room = rooms[roomId];
+        const p = room.players.find(p => p.userId === socket.userId);
+        if (p) {
+            p.online = false;
+            io.to(roomId).emit('playerAway', { userId: p.userId });
 
-                // 3. Salva il timer nella mappa esterna usando userId come chiave
-                disconnectTimers[p.userId] = setTimeout(() => {
-                    if (!p.online) {
-                        io.to(roomId).emit('playerDisconnected', { name: p.name });
-                        delete rooms[roomId];
-                        delete disconnectTimers[p.userId]; // Pulizia
-                    }
-                }, 60000); 
-                break;
+            // Elimina la stanza solo se TUTTI i giocatori sono offline
+            const allOffline = room.players.every(player => !player.online);
+            if (allOffline) {
+                delete rooms[roomId];
+            }
+            break;
             }
         }
     });
