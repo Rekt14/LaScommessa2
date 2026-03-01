@@ -25,33 +25,38 @@ function createDeck() {
     return deck.sort(() => Math.random() - 0.5);
 }
 
+const disconnectTimers = {};
+
 io.on('connection', (socket) => {
 
-   socket.on('handshake', (userId) => {
-    console.log("Ricevuto handshake da:", userId); // <-- TEST 1
+    socket.on('handshake', (userId) => {
     socket.userId = userId;
-    
     for (const roomId in rooms) {
         const room = rooms[roomId];
         const p = room.players.find(p => p.userId === userId);
         
         if (p) {
-            console.log("Giocatore trovato! Risincronizzo stanza:", roomId); // <-- TEST 2
             p.id = socket.id;
             p.online = true;
 
+            // 2. Recupera e cancella il timer dalla mappa esterna
+                if (disconnectTimers[userId]) {
+                    clearTimeout(disconnectTimers[userId]);
+                    delete disconnectTimers[userId];
+                }
+            
             socket.join(roomId);
             io.to(roomId).emit('playerBack', { userId: p.userId, newSocketId: socket.id });
 
+            // Crea una copia della stanza senza dati circolari se necessario
             socket.emit('reSyncGame', { 
                 room, 
                 hand: p.hand,
                 myId: socket.id 
             });
-            return;
+            break;
         }
     }
-    console.log("Nessuna stanza trovata per questo utente."); // <-- TEST 3
 });
     
     socket.on('createRoom', (data) => {
@@ -173,19 +178,22 @@ io.on('connection', (socket) => {
 });
 
     socket.on('disconnect', () => {
-    for (const roomId in rooms) {
-        const room = rooms[roomId];
-        const p = room.players.find(p => p.userId === socket.userId);
-        if (p) {
-            p.online = false;
-            io.to(roomId).emit('playerAway', { userId: p.userId });
+        for (const roomId in rooms) {
+            const room = rooms[roomId];
+            const p = room.players.find(p => p.userId === socket.userId);
+            if (p) {
+                p.online = false;
+                io.to(roomId).emit('playerAway', { userId: p.userId, timeout: 60 });
 
-            // Elimina la stanza solo se TUTTI i giocatori sono offline
-            const allOffline = room.players.every(player => !player.online);
-            if (allOffline) {
-                delete rooms[roomId];
-            }
-            break;
+                // 3. Salva il timer nella mappa esterna usando userId come chiave
+                disconnectTimers[p.userId] = setTimeout(() => {
+                    if (!p.online) {
+                        io.to(roomId).emit('playerDisconnected', { name: p.name });
+                        delete rooms[roomId];
+                        delete disconnectTimers[p.userId]; // Pulizia
+                    }
+                }, 60000); 
+                break;
             }
         }
     });
@@ -197,19 +205,16 @@ function leaveOldRooms(userId, socket) {
         const playerIndex = room.players.findIndex(p => p.userId === userId);
 
         if (playerIndex !== -1) {
-            // Rimuoviamo il giocatore dall'array
-            room.players.splice(playerIndex, 1);
-            socket.leave(roomId);
-
-            // Elimina la stanza SOLO se non c'è più nessuno (nemmeno offline)
-            if (room.players.length === 0) {
-                console.log(`Stanza ${roomId} vuota, eliminata.`);
+            // Se era l'unico o il creatore, distruggiamo la stanza
+            // Altrimenti lo rimuoviamo semplicemente
+            if (room.players.length <= 1 || room.creatorUserId === userId) {
+                io.to(roomId).emit('playerDisconnected', { name: room.players[playerIndex].name });
                 delete rooms[roomId];
             } else {
-                // Notifica chi è rimasto
-                io.to(roomId).emit('updateRoomData', room);
-                io.emit('updateRoomList', Object.values(rooms).filter(r => r.status === 'waiting'));
+                room.players.splice(playerIndex, 1);
+                io.to(roomId).emit('updateRoomData', room); // Notifica agli altri
             }
+            socket.leave(roomId); // Esce dal canale Socket.io
         }
     }
 }
