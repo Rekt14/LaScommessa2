@@ -202,7 +202,7 @@ async function startServer() {
 
                         disconnectTimers[p.userId] = setTimeout(async () => {
                             if (!p.online) {
-                                console.log(`[DB-PULIZIA] Timeout stanza ${roomId}`);
+                                console.log(`[ELIMINAZIONE] Stanza ${roomId} cancellata: Timeout 60s scaduto per utente ${p.userId}`);
                                 io.to(roomId).emit('playerDisconnected', { name: p.name });
                                 delete rooms[roomId];
                                 await deleteRoomFromDB(roomId);
@@ -224,9 +224,12 @@ async function leaveOldRooms(userId, socket) {
         const room = rooms[roomId];
         const playerIndex = room.players.findIndex(p => p.userId === userId);
         if (playerIndex !== -1) {
+            const reason = `${userId} si è disconnesso.`;
+                console.log(`[ELIMINAZIONE] Stanza ${roomId} cancellata: ${reason}`);
             room.players.splice(playerIndex, 1);
             socket.leave(roomId);
             if (room.players.length === 0) {
+                console.log(`Stanza ${roomId} vuota, eliminata.`);
                 delete rooms[roomId];
                 await deleteRoomFromDB(roomId);
             } else {
@@ -294,6 +297,7 @@ function endRound(room) {
     });
 
     if (room.currentRound === 10) {
+        console.log(`[ELIMINAZIONE] Stanza ${room.id} cancellata: Partita terminata (Round 10)`);
         setTimeout(async () => {
             delete rooms[room.id];
             await deleteRoomFromDB(room.id);
