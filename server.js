@@ -70,26 +70,34 @@ async function startServer() {
         console.log(`Recuperate ${existingRooms.length} stanze dal database.`);
 
         io.on('connection', (socket) => {
+
             socket.on('handshake', (userId) => {
-                socket.userId = userId;
-                for (const roomId in rooms) {
-                    const room = rooms[roomId];
-                    const p = room.players.find(p => p.userId === userId);
-                    if (p) {
-                        p.id = socket.id;
-                        p.online = true;
-                        if (disconnectTimers[userId]) {
-                            clearTimeout(disconnectTimers[userId]);
-                            delete disconnectTimers[userId];
-                        }
-                        socket.join(roomId);
-                        io.to(roomId).emit('playerBack', { userId: p.userId, newSocketId: socket.id });
-                        socket.emit('reSyncGame', { room, hand: p.hand, myId: socket.id });
-                        syncRoom(roomId); // Aggiorna stato online su DB
-                        break;
-                    }
-                }
-            });
+    socket.userId = userId;
+    for (const roomId in rooms) {
+        const room = rooms[roomId];
+        const p = room.players.find(p => p.userId === userId);
+        if (p) {
+            // PULIZIA TIMER
+            if (disconnectTimers[userId]) {
+                clearTimeout(disconnectTimers[userId]);
+                delete disconnectTimers[userId];
+                console.log(`[RE-JOIN] Timer rimosso per ${userId}`);
+            }
+
+            p.id = socket.id;
+            p.online = true;
+            socket.join(roomId);
+
+            // Notifica che il giocatore è tornato (ferma il timer nel frontend degli altri)
+            io.to(roomId).emit('playerBack', { userId: p.userId, newSocketId: socket.id });
+            
+            // Sincronizza lo stato
+            socket.emit('reSyncGame', { room, hand: p.hand, myId: socket.id });
+            syncRoom(roomId); 
+            break;
+        }
+    }
+});
 
             socket.on('createRoom', async (data) => {
                 await leaveOldRooms(socket.userId, socket);
