@@ -71,6 +71,9 @@ async function startServer() {
 
         io.on('connection', (socket) => {
 
+            // Invia la lista stanze appena l'utente si connette alla Home
+    io.emit('updateRoomList', Object.values(rooms));
+
             socket.on('handshake', (userId) => {
     socket.userId = userId;
     for (const roomId in rooms) {
@@ -123,7 +126,7 @@ async function startServer() {
                 socket.join(roomId);
                 await syncRoom(roomId);
                 socket.emit('roomCreated', rooms[roomId]);
-                io.emit('updateRoomList', Object.values(rooms).filter(r => r.status === 'waiting'));
+                io.emit('updateRoomList', Object.values(rooms));
             });
 
             socket.on('joinRoom', async (data) => {
@@ -143,7 +146,7 @@ async function startServer() {
                         startNewRound(room);
                     }
                     await syncRoom(data.roomId);
-                    io.emit('updateRoomList', Object.values(rooms).filter(r => r.status === 'waiting'));
+                    io.emit('updateRoomList', Object.values(rooms));
                 }
             });
 
@@ -211,7 +214,7 @@ async function startServer() {
                         disconnectTimers[p.userId] = setTimeout(async () => {
                             if (!p.online) {
                                 console.log(`[ELIMINAZIONE] Stanza ${roomId} cancellata: Timeout 60s scaduto per utente ${p.userId}`);
-                                io.to(roomId).emit('playerDisconnected', { name: p.name });
+                                io.to(roomId).emit('playerDisconnected', { name: p.name, userId: p.userId });
                                 delete rooms[roomId];
                                 await deleteRoomFromDB(roomId);
                                 delete disconnectTimers[p.userId];
@@ -230,20 +233,35 @@ async function startServer() {
 async function leaveOldRooms(userId, socket) {
     for (const roomId in rooms) {
         const room = rooms[roomId];
-        const playerIndex = room.players.findIndex(p => p.userId === userId);
-        if (playerIndex !== -1) {
-            const reason = `${userId} si è disconnesso.`;
-                console.log(`[ELIMINAZIONE] Stanza ${roomId} cancellata: ${reason}`);
-            room.players.splice(playerIndex, 1);
-            socket.leave(roomId);
-            if (room.players.length === 0) {
-                console.log(`Stanza ${roomId} vuota, eliminata.`);
+        const pIndex = room.players.findIndex(p => p.userId === userId);
+        
+        if (pIndex !== -1) {
+            const playerLeaving = room.players[pIndex];
+
+            if (room.status === 'playing') {
+                // Notifica a tutti nella stanza chi è uscito
+                io.to(roomId).emit('playerDisconnected', { 
+                    name: playerLeaving.name, 
+                    userId: userId 
+                });
+                
+                console.log(`[ELIMINAZIONE] Stanza ${roomId} eliminata: ${playerLeaving.name} ha cambiato sessione.`);
+                
                 delete rooms[roomId];
                 await deleteRoomFromDB(roomId);
             } else {
-                io.to(roomId).emit('updateRoomData', room);
-                await syncRoom(roomId);
+                // In waiting: rimuoviamo solo il giocatore
+                room.players.splice(pIndex, 1);
+                
+                if (room.players.length === 0) {
+                    delete rooms[roomId];
+                    await deleteRoomFromDB(roomId);
+                } else {
+                    // Aggiorna la lista stanze per gli altri in lobby
+                   io.emit('updateRoomList', Object.values(rooms));
+                }
             }
+            socket.leave(roomId);
         }
     }
 }
