@@ -322,15 +322,20 @@ function endRound(room) {
         p.points += gained;
     });
 
+    // Invia sempre l'evento: serve al frontend per mostrare i punti finali e il tasto Home
+    io.to(room.id).emit('roundEnded', { 
+        players: room.players, 
+        nextRound: room.currentRound + 1 
+    });
+
     if (room.currentRound === 10) {
-        console.log(`[ELIMINAZIONE] Stanza ${room.id} cancellata: Partita terminata (Round 10)`);
+        console.log(`[FINE] Stanza ${room.id} terminata al Round 10`);
         setTimeout(async () => {
             delete rooms[room.id];
             await deleteRoomFromDB(room.id);
-        }, 1000);
-    } else {
-        io.to(room.id).emit('roundEnded', { players: room.players, nextRound: room.currentRound + 1 });
+        }, 5000); // 5 secondi di margine prima di pulire il DB
     }
+
     syncRoom(room.id);
 }
 
