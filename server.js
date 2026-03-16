@@ -84,7 +84,7 @@ async function startServer() {
             if (disconnectTimers[userId]) {
                 clearTimeout(disconnectTimers[userId]);
                 delete disconnectTimers[userId];
-                console.log(`[RE-JOIN] Timer rimosso per ${userId}`);
+                console.log(`[RE-JOIN] Timer rimosso per ${p.name}`);
             }
 
             p.id = socket.id;
@@ -144,6 +144,9 @@ async function startServer() {
                         room.status = 'playing';
                         io.to(room.id).emit('startGame', room);
                         startNewRound(room);
+
+                        const nomi = room.players.map(p => p.name).join(" e ");
+            console.log(`[INIZIO PARTITA] ${nomi} hanno iniziato una partita nella stanza "${room.id}"`);
                     }
                     await syncRoom(data.roomId);
                     io.emit('updateRoomList', Object.values(rooms));
@@ -213,11 +216,12 @@ async function startServer() {
 
                         disconnectTimers[p.userId] = setTimeout(async () => {
                             if (!p.online) {
-                                console.log(`[ELIMINAZIONE] Stanza ${roomId} cancellata: Timeout 60s scaduto per utente ${p.userId}`);
+                                console.log(`[ELIMINAZIONE] Stanza ${roomId} cancellata: Timeout 60s scaduto per utente ${p.name}`);
                                 io.to(roomId).emit('playerDisconnected', { name: p.name, userId: p.userId });
                                 delete rooms[roomId];
                                 await deleteRoomFromDB(roomId);
                                 delete disconnectTimers[p.userId];
+                                io.emit('updateRoomList', Object.values(rooms));
                             }
                         }, 60000); 
                         break;
@@ -328,11 +332,14 @@ function endRound(room) {
         nextRound: room.currentRound + 1 
     });
 
+    console.log(`[ROUND TERMINATO] Round ${room.currentRound} terminato nella stanza "${room.id}"`);
+
     if (room.currentRound === 10) {
-        console.log(`[FINE] Stanza ${room.id} terminata al Round 10`);
+        console.log(`[ELIMINAZIONE] Stanza ${room.id} cancellata: Partita terminata (Round 10)`);
         setTimeout(async () => {
             delete rooms[room.id];
             await deleteRoomFromDB(room.id);
+            io.emit('updateRoomList', Object.values(rooms));
         }, 5000); // 5 secondi di margine prima di pulire il DB
     }
 
